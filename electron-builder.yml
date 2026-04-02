@@ -1,0 +1,40 @@
+appId: com.rethink.app
+productName: ReThink
+copyright: Copyright © 2025
+
+asar: false
+
+directories:
+  output: release
+
+files:
+  - dist/**/*
+  - build/icons/generated/**/*
+  - server.mjs
+  - electron/**/*
+  - node_modules/**/*
+  - package.json
+  - "!node_modules/.cache"
+  - "!node_modules/@types"
+  - "!src/**"
+
+extraMetadata:
+  main: electron/main.mjs
+
+win:
+  icon: build/icons/generated/app.ico
+  target:
+    - target: dir
+      arch: [x64]
+
+mac:
+  target:
+    - target: dir
+      arch: [x64, arm64]
+  category: public.app-category.developer-tools
+
+linux:
+  target:
+    - target: dir
+      arch: [x64]
+  category: Development
