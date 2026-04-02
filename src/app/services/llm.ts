@@ -7,23 +7,21 @@
 
 /**
  * Resolve the effective base URL.
- * On localhost the request goes to `/llm-proxy/...` and a custom header tells
- * the Vite middleware which upstream origin to forward to.
+ * ALL requests go through `/llm-proxy/...` so the server-side proxy
+ * (Vite middleware in dev, Vercel Serverless Function in production)
+ * can forward to the actual LLM API and handle CORS.
  */
 function resolveBaseUrl(baseUrl: string): { url: string; extraHeaders?: Record<string, string> } {
   const trimmed = baseUrl.replace(/\/+$/, "");
-  if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
-    try {
-      const parsed = new URL(trimmed);
-      return {
-        url: "/llm-proxy" + parsed.pathname,
-        extraHeaders: { "X-LLM-Target": parsed.origin },
-      };
-    } catch {
-      return { url: trimmed };
-    }
+  try {
+    const parsed = new URL(trimmed);
+    return {
+      url: "/llm-proxy" + parsed.pathname,
+      extraHeaders: { "X-LLM-Target": parsed.origin },
+    };
+  } catch {
+    return { url: trimmed };
   }
-  return { url: trimmed };
 }
 
 export interface ChatMessage {

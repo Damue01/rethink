@@ -48,18 +48,15 @@ let rpcId = 0;
 
 function resolveUrl(serverUrl: string): { url: string; extraHeaders?: Record<string, string> } {
   const trimmed = serverUrl.replace(/\/+$/, "");
-  if (typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
-    try {
-      const parsed = new URL(trimmed);
-      return {
-        url: "/mcp-proxy" + parsed.pathname,
-        extraHeaders: { "X-MCP-Target": parsed.origin },
-      };
-    } catch {
-      return { url: trimmed };
-    }
+  try {
+    const parsed = new URL(trimmed);
+    return {
+      url: "/mcp-proxy" + parsed.pathname,
+      extraHeaders: { "X-MCP-Target": parsed.origin },
+    };
+  } catch {
+    return { url: trimmed };
   }
-  return { url: trimmed };
 }
 
 function buildHeaders(server: McpServerConfig, extra?: Record<string, string>): Record<string, string> {

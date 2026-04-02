@@ -1,0 +1,11 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "rewrites": [
+    { "source": "/llm-proxy/(.*)", "destination": "/api/llm-proxy" },
+    { "source": "/mcp-proxy/(.*)", "destination": "/api/mcp-proxy" },
+    { "source": "/builtin-tools/execute", "destination": "/api/builtin-tools" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
+}
