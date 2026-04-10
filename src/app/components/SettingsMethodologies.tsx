@@ -109,7 +109,7 @@ export function SettingsMethodologies() {
       {/* Right - Detail */}
       <div className="flex-1 flex flex-col overflow-hidden bg-[#f8fafb]">
         {/* Header */}
-        <div className="px-6 py-5 bg-white border-b border-[#ebebeb] shrink-0">
+        <div className="px-4 md:px-6 py-4 md:py-5 bg-white border-b border-[#ebebeb] shrink-0">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
               {/* Emoji - clickable */}

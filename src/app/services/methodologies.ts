@@ -11,6 +11,9 @@ export interface Methodology {
 
 const STORAGE_KEY = "ai-review-methodologies";
 
+/** Module-level cache — avoids repeated JSON.parse on every call */
+let _cache: Methodology[] | null = null;
+
 export const defaultMethodologies: Methodology[] = [
   {
     id: "none",
@@ -87,16 +90,22 @@ export const defaultMethodologies: Methodology[] = [
 ];
 
 export function loadMethodologies(): Methodology[] {
+  if (_cache) return _cache;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Methodology[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        _cache = parsed;
+        return parsed;
+      }
     }
   } catch { /* ignore */ }
+  _cache = defaultMethodologies;
   return defaultMethodologies;
 }
 
 export function saveMethodologies(methodologies: Methodology[]) {
+  _cache = methodologies;
   localStorage.setItem(STORAGE_KEY, JSON.stringify(methodologies));
 }

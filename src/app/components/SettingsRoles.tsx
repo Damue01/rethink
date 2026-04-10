@@ -271,7 +271,7 @@ export function SettingsRoles() {
 
       {/* Center - Config & Prompt */}
       <div className="flex-1 flex flex-col overflow-hidden bg-[#f8fafb]">
-        <div className="px-6 py-5 bg-white border-b border-[#ebebeb] shrink-0">
+        <div className="px-4 md:px-6 py-4 md:py-5 bg-white border-b border-[#ebebeb] shrink-0">
           <div className="flex items-start justify-between mb-4">
             <div className="flex items-center gap-3">
               <div ref={emojiRef} className="relative">

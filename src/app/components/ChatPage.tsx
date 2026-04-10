@@ -4,10 +4,8 @@ import {
   ChevronDown,
   Search,
   Plus,
-  MoreHorizontal,
   User,
   Sparkles,
-  PanelLeftClose,
   PanelLeft,
   GitCompare,
   X,
@@ -16,9 +14,7 @@ import {
   Hash,
   ThumbsUp,
   ArrowLeft,
-  Trash2,
   Copy,
-  Pencil,
   Settings,
   Upload,
   FileText,
@@ -47,9 +43,10 @@ import {
   readChatAttachments,
   type ChatAttachment,
 } from "../services/chatAttachments";
+import { createStorageHelper, groupByRecency } from "../services/storage";
+import { HistorySidebar } from "./HistorySidebar";
+import { useIsMobile } from "./ui/use-mobile";
 /* ── Conversation persistence ── */
-
-const CONVERSATIONS_KEY = "ai-review-conversations";
 
 interface StoredConversation {
   id: string;
@@ -90,34 +87,18 @@ interface CompareRound {
   adoptedModelId: string | null;
 }
 
+const chatStorage = createStorageHelper<StoredConversation>("ai-review-conversations");
+
 function loadConversations(): StoredConversation[] {
-  try {
-    const raw = localStorage.getItem(CONVERSATIONS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch { /* ignore */ }
-  return [];
+  return chatStorage.load();
 }
 
 function saveConversations(convs: StoredConversation[]) {
-  localStorage.setItem(CONVERSATIONS_KEY, JSON.stringify(convs));
+  chatStorage.save(convs);
 }
 
 function groupConversations(convs: StoredConversation[]) {
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const yesterdayStart = todayStart - 86400000;
-  const sorted = [...convs].sort((a, b) => b.updatedAt - a.updatedAt);
-  const groups: { label: string; items: { id: string; title: string }[] }[] = [];
-  const todayItems = sorted.filter(c => c.updatedAt >= todayStart);
-  const yesterdayItems = sorted.filter(c => c.updatedAt >= yesterdayStart && c.updatedAt < todayStart);
-  const earlierItems = sorted.filter(c => c.updatedAt < yesterdayStart);
-  if (todayItems.length) groups.push({ label: "今天", items: todayItems.map(c => ({ id: c.id, title: c.title })) });
-  if (yesterdayItems.length) groups.push({ label: "昨天", items: yesterdayItems.map(c => ({ id: c.id, title: c.title })) });
-  if (earlierItems.length) groups.push({ label: "更早", items: earlierItems.map(c => ({ id: c.id, title: c.title })) });
-  return groups;
+  return groupByRecency(convs, (c) => c.updatedAt, (c) => ({ id: c.id, title: c.title }));
 }
 
 function getMessagePromptContent(message: Message) {
@@ -131,6 +112,7 @@ export function ChatPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const isMobile = useIsMobile();
 
   /* ── Methodology from config ── */
   const configuredMethodologies = loadMethodologies();
@@ -161,9 +143,13 @@ export function ChatPage() {
   const methodDropdownRef = useRef<HTMLDivElement>(null);
   const modelDropdownRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Auto-close sidebar on mobile
+  useEffect(() => {
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
 
   /* ── Compare mode state ── */
   const [compareState, setCompareState] =
@@ -193,11 +179,7 @@ export function ChatPage() {
   const initialSkillRef = useRef(searchParams.get("skill"));
   const initialMethodRef = useRef(searchParams.get("methodology"));
 
-  /* ── Sidebar context menu state ── */
-  const [contextMenuId, setContextMenuId] = useState<string | null>(null);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const contextMenuRef = useRef<HTMLDivElement>(null);
+  /* (sidebar state moved to HistorySidebar component) */
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const compareEndRef = useRef<HTMLDivElement>(null);
@@ -209,11 +191,19 @@ export function ChatPage() {
   const selectedMethodIdRef = useRef<string>(selectedMethodId);
   useEffect(() => { selectedMethodIdRef.current = selectedMethodId; }, [selectedMethodId]);
 
+  /* ── Streaming message overlay ── */
+  // During streaming, the in-progress assistant message lives here instead
+  // of inside the `messages` array. This avoids .map() over the full array
+  // on every token and prevents re-rendering completed messages.
+  const streamingMsgRef = useRef<Message | null>(null);
+  const [streamingMsgVersion, setStreamingMsgVersion] = useState(0);
+  const streamingMsg = streamingMsgRef.current; // read on render via version bump
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({
       behavior: "smooth",
     });
-  }, [messages]);
+  }, [messages, streamingMsgVersion]);
 
   useEffect(() => {
     compareEndRef.current?.scrollIntoView({
@@ -254,11 +244,7 @@ export function ChatPage() {
 
   /* ── Conversation persistence ── */
   const [conversations, setConversations] = useState<StoredConversation[]>(loadConversations);
-  const historyGroups = groupConversations(
-    searchQuery
-      ? conversations.filter(c => c.title.toLowerCase().includes(searchQuery.toLowerCase()))
-      : conversations
-  );
+  const historyGroups = groupConversations(conversations);
 
   // Redirect /chat/new to a fresh conversation ID (preserve query params)
   useEffect(() => {
@@ -272,6 +258,11 @@ export function ChatPage() {
   // Load conversation by route id
   useEffect(() => {
     if (id && id !== "new") {
+      setInput("");
+      setPendingAttachments([]);
+      setComposerError(null);
+      setIsComposerDragActive(false);
+      setIsAttachmentMenuOpen(false);
       const conv = loadConversations().find(c => c.id === id);
       if (conv) {
         setMessages(conv.messages);
@@ -348,18 +339,6 @@ export function ChatPage() {
   }, [activeSkillIds, selectedMethodId]);
 
   /* ── Handlers ── */
-
-  // Close sidebar context menu on outside click
-  useEffect(() => {
-    if (!contextMenuId) return;
-    const handler = (e: MouseEvent) => {
-      if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
-        setContextMenuId(null);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [contextMenuId]);
 
   const handleRenameConversation = (convId: string, newTitle: string) => {
     const convs = loadConversations();
@@ -501,8 +480,6 @@ export function ChatPage() {
 
     const modelName = modelInfo.model.displayName;
     const assistantMsgId = (Date.now() + 1).toString();
-    // Add empty assistant message that will be streamed into
-    setMessages((prev) => [...prev, { id: assistantMsgId, role: "assistant", model: modelName, content: "", reasoning: "", toolCalls: [] as ToolCallEvent[] }]);
 
     const llmMessages: LLMMessage[] = [
       { role: "system", content: buildSystemPrompt() },
@@ -511,12 +488,20 @@ export function ChatPage() {
       { role: "user" as const, content: promptContent },
     ];
 
-    // Closure tracker: accumulates content even after component unmount
+    // Closure tracker: accumulates content even after component unmount.
+    // Instead of calling setMessages(prev => prev.map(...)) on every token,
+    // we update only a lightweight streaming state. The full messages array
+    // is only updated once on completion.
     const streaming = { content: "", reasoning: "", toolCalls: [] as ToolCallEvent[] };
     const messagesWithUser = [...messages, userMsg];
     const convId = id!;
     const capturedSkillIds = [...activeSkillIds];
     const capturedMethodId = selectedMethodId;
+
+    // Set up the streaming overlay message (rendered separately from the messages array)
+    streamingMsgRef.current = { id: assistantMsgId, role: "assistant", model: modelName, content: "", reasoning: "", toolCalls: [] };
+    setStreamingMsgVersion((v) => v + 1);
+
     const saveStreamToStorage = () => {
       const assistantMsg: Message = {
         id: assistantMsgId, role: "assistant", model: modelName,
@@ -531,6 +516,18 @@ export function ChatPage() {
       const conv: StoredConversation = { id: convId, title, messages: finalMsgs, activeSkillIds: capturedSkillIds, selectedMethodId: capturedMethodId, updatedAt: Date.now() };
       if (ci >= 0) { convs[ci] = conv; } else { convs.unshift(conv); }
       saveConversations(convs);
+    };
+
+    const mergeStreamingToMessages = () => {
+      const finalMsg: Message = {
+        id: assistantMsgId, role: "assistant", model: modelName,
+        content: streaming.content,
+        reasoning: streaming.reasoning || undefined,
+        toolCalls: streaming.toolCalls.length > 0 ? [...streaming.toolCalls] : undefined,
+      };
+      setMessages((prev) => [...prev, finalMsg]);
+      streamingMsgRef.current = null;
+      setStreamingMsgVersion((v) => v + 1);
     };
 
     const abort = new AbortController();
@@ -549,44 +546,41 @@ export function ChatPage() {
       {
         onReasoning: (token) => {
           streaming.reasoning += token;
-          setMessages((prev) => prev.map((m) =>
-            m.id === assistantMsgId ? { ...m, reasoning: (m.reasoning ?? "") + token } : m
-          ));
+          if (streamingMsgRef.current) {
+            streamingMsgRef.current = { ...streamingMsgRef.current, reasoning: streaming.reasoning };
+            setStreamingMsgVersion((v) => v + 1);
+          }
         },
         onToken: (token) => {
           streaming.content += token;
-          setMessages((prev) => prev.map((m) =>
-            m.id === assistantMsgId ? { ...m, content: m.content + token } : m
-          ));
+          if (streamingMsgRef.current) {
+            streamingMsgRef.current = { ...streamingMsgRef.current, content: streaming.content };
+            setStreamingMsgVersion((v) => v + 1);
+          }
         },
         onToolCallEvent: (event) => {
           const tcIdx = streaming.toolCalls.findIndex(tc => tc.id === event.id);
           if (tcIdx >= 0) streaming.toolCalls[tcIdx] = event; else streaming.toolCalls.push({ ...event });
-          setMessages((prev) => prev.map((m) => {
-            if (m.id !== assistantMsgId) return m;
-            const existing = (m.toolCalls ?? []) as ToolCallEvent[];
-            const idx = existing.findIndex((tc: ToolCallEvent) => tc.id === event.id);
-            const updated = idx >= 0
-              ? existing.map((tc: ToolCallEvent, i: number) => i === idx ? event : tc)
-              : [...existing, event];
-            return { ...m, toolCalls: updated };
-          }));
+          if (streamingMsgRef.current) {
+            streamingMsgRef.current = { ...streamingMsgRef.current, toolCalls: [...streaming.toolCalls] };
+            setStreamingMsgVersion((v) => v + 1);
+          }
         },
         onContentReset: () => {
           streaming.content = "";
-          setMessages((prev) => prev.map((m) =>
-            m.id === assistantMsgId ? { ...m, content: "" } : m
-          ));
+          if (streamingMsgRef.current) {
+            streamingMsgRef.current = { ...streamingMsgRef.current, content: "" };
+            setStreamingMsgVersion((v) => v + 1);
+          }
         },
         onDone: () => {
+          mergeStreamingToMessages();
           setIsTyping(false);
           saveStreamToStorage();
         },
         onError: (err) => {
           streaming.content = `⚠️ API 调用失败: ${err.message}`;
-          setMessages((prev) => prev.map((m) =>
-            m.id === assistantMsgId ? { ...m, content: streaming.content } : m
-          ));
+          mergeStreamingToMessages();
           setIsTyping(false);
           saveStreamToStorage();
         },
@@ -903,117 +897,17 @@ export function ChatPage() {
     <div className="flex h-full font-['Inter',sans-serif]">
       {/* ── History Sidebar ── */}
       {sidebarOpen && (
-        <div className="w-[220px] bg-white border-r border-[#ebebeb] flex flex-col shrink-0">
-          <div className="p-3 flex items-center gap-2">
-            <button
-              onClick={() => navigate("/chat/new")}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-[8px] bg-[#030213] text-white rounded-[7px] text-[12px] hover:bg-[#1a1a2e] transition-colors"
-              style={{ fontWeight: 500 }}
-            >
-              <Plus className="w-[13px] h-[13px]" />
-              新建对话
-            </button>
-            <button
-              onClick={() => setSidebarOpen(false)}
-              className="w-[32px] h-[32px] rounded-[7px] hover:bg-[#f3f3f5] flex items-center justify-center transition-colors shrink-0"
-            >
-              <PanelLeftClose className="w-[14px] h-[14px] text-[#717182]" />
-            </button>
-          </div>
-          <div className="px-3 pb-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-[12px] w-[12px] -translate-y-1/2 text-[#8a9193]" />
-              <Input
-                size="xs"
-                className="pl-8"
-                placeholder="搜索对话..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto px-2 pb-3">
-            {historyGroups.map((group) => (
-              <div key={group.label} className="mb-1.5">
-                <p
-                  className="px-2 py-1.5 text-[10px] text-[#8a9193]"
-                  style={{ fontWeight: 500 }}
-                >
-                  {group.label}
-                </p>
-                {group.items.map((item) => (
-                  <div key={item.id} className="relative group">
-                    {renamingId === item.id ? (
-                      <div className="flex items-center px-2.5 py-[4px]">
-                        <Input
-                          autoFocus
-                          size="xs"
-                          surface="white"
-                          className="flex-1 border-[#030213] focus-visible:border-[#030213] focus-visible:ring-[rgba(3,2,19,0.08)]"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleRenameConversation(item.id, renameValue);
-                            if (e.key === "Escape") setRenamingId(null);
-                          }}
-                          onBlur={() => handleRenameConversation(item.id, renameValue)}
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => navigate(`/chat/${item.id}`)}
-                        className={`w-full text-left px-2.5 py-[6px] rounded-[7px] text-[12px] transition-colors flex items-center ${
-                          item.id === id
-                            ? "bg-[#f3f3f5] text-[#0a0a0a]"
-                            : "text-[#0a0a0a] hover:bg-[#f8fafb]"
-                        }`}
-                        style={{ fontWeight: 400 }}
-                      >
-                        <span className="truncate flex-1">
-                          {item.title}
-                        </span>
-                        <span
-                          className="opacity-0 group-hover:opacity-100 shrink-0"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setContextMenuId(contextMenuId === item.id ? null : item.id);
-                          }}
-                        >
-                          <MoreHorizontal className="w-[12px] h-[12px] text-[#8a9193]" />
-                        </span>
-                      </button>
-                    )}
-                    {contextMenuId === item.id && (
-                      <div
-                        ref={contextMenuRef}
-                        className="absolute right-0 top-full mt-0.5 w-[120px] bg-white border border-[rgba(0,0,0,0.1)] rounded-[7px] shadow-[0_4px_12px_rgba(0,0,0,0.08)] py-1 z-30"
-                      >
-                        <button
-                          onClick={() => {
-                            setRenameValue(item.title);
-                            setRenamingId(item.id);
-                            setContextMenuId(null);
-                          }}
-                          className="w-full text-left px-3 py-[5px] text-[11px] text-[#0a0a0a] hover:bg-[#f3f3f5] transition-colors flex items-center gap-2"
-                        >
-                          <Pencil className="w-[11px] h-[11px] text-[#717182]" />
-                          重命名
-                        </button>
-                        <button
-                          onClick={() => handleDeleteConversation(item.id)}
-                          className="w-full text-left px-3 py-[5px] text-[11px] text-[#dc2626] hover:bg-[#fef2f2] transition-colors flex items-center gap-2"
-                        >
-                          <Trash2 className="w-[11px] h-[11px]" />
-                          删除
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
+        <HistorySidebar
+          routePrefix="/chat"
+          activeId={id}
+          newLabel="新建对话"
+          searchPlaceholder="搜索对话..."
+          groups={historyGroups}
+          onClose={() => setSidebarOpen(false)}
+          onRename={handleRenameConversation}
+          onDelete={handleDeleteConversation}
+          open={sidebarOpen}
+        />
       )}
 
       {/* ── Main Area ── */}
@@ -1338,7 +1232,78 @@ export function ChatPage() {
                     )}
                   </div>
                 ))}
-                {isTyping && messages[messages.length - 1]?.role !== "assistant" && (
+                {/* Streaming message overlay — rendered outside the messages array to avoid full-list re-render on each token */}
+                {streamingMsg && (
+                  <div className="group/msg flex gap-3">
+                    <div className="w-[30px] h-[30px] rounded-full bg-[#030213] flex items-center justify-center shrink-0 mt-0.5">
+                      <Sparkles className="w-[13px] h-[13px] text-white" />
+                    </div>
+                    <div className="max-w-[70%] min-w-0">
+                      {streamingMsg.model && (
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-[10px] text-[#8a9193]" style={{ fontWeight: 400 }}>{streamingMsg.model}</span>
+                        </div>
+                      )}
+                      {streamingMsg.reasoning && (
+                        <details className={`mb-2 rounded-[8px] border border-[#e8e5ff] bg-[#faf9ff] overflow-hidden ${!streamingMsg.content ? "open" : ""}`} open={!streamingMsg.content ? true : undefined}>
+                          <summary className="px-3 py-2 text-[11.5px] text-[#7c6fbb] cursor-pointer hover:bg-[#f3f0ff] transition-colors flex items-center gap-1.5 select-none" style={{ fontWeight: 500 }}>
+                            <svg className="w-[12px] h-[12px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+                            思考过程
+                            {!streamingMsg.content && (
+                              <span className="inline-flex gap-0.5 items-center ml-1">
+                                <span className="w-[3px] h-[3px] bg-[#7c6fbb] rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                                <span className="w-[3px] h-[3px] bg-[#7c6fbb] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                                <span className="w-[3px] h-[3px] bg-[#7c6fbb] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                              </span>
+                            )}
+                          </summary>
+                          <div className="px-3 pb-2.5 text-[12px] text-[#5a5078] leading-[1.7] whitespace-pre-wrap border-t border-[#e8e5ff]">
+                            {streamingMsg.reasoning}
+                          </div>
+                        </details>
+                      )}
+                      {streamingMsg.toolCalls && (streamingMsg.toolCalls as ToolCallEvent[]).length > 0 && (
+                        <div className="mb-2 space-y-1">
+                          {(streamingMsg.toolCalls as ToolCallEvent[]).map((tc: ToolCallEvent) => (
+                            <details key={tc.id} className="rounded-[7px] border border-[#e2e8f0] bg-[#f8fafb] overflow-hidden">
+                              <summary className="px-3 py-1.5 text-[11px] cursor-pointer hover:bg-[#f0f4ff] transition-colors flex items-center gap-1.5 select-none" style={{ fontWeight: 500 }}>
+                                {tc.status === "calling" ? (
+                                  <Sparkles className="w-[11px] h-[11px] text-[#f59e0b] animate-pulse" />
+                                ) : tc.status === "error" ? (
+                                  <span className="text-[#ef4444]">✕</span>
+                                ) : (
+                                  <span className="text-[#10b981]">✓</span>
+                                )}
+                                <span className="text-[#415a9b]">{tc.name}</span>
+                                <span className="text-[#9ca3af]">{tc.status === "calling" ? "调用中..." : tc.status === "error" ? "失败" : "完成"}</span>
+                              </summary>
+                              <div className="px-3 pb-2 text-[10.5px] text-[#717182] border-t border-[#e2e8f0] space-y-1">
+                                <div className="mt-1"><span style={{ fontWeight: 500 }}>参数:</span> <code className="text-[10px] bg-[#e8eaed] px-1 py-0.5 rounded break-all">{JSON.stringify(tc.arguments)}</code></div>
+                                {tc.result && (
+                                  <div><span style={{ fontWeight: 500 }}>结果:</span> <pre className="mt-0.5 text-[10px] bg-[#f3f3f5] rounded p-2 overflow-x-auto max-h-[150px] overflow-y-auto whitespace-pre-wrap">{tc.result.slice(0, 2000)}</pre></div>
+                                )}
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      )}
+                      <div className="rounded-[10px] px-4 py-3 text-[13px] leading-[1.7] bg-white border border-[rgba(0,0,0,0.08)] text-[#0a0a0a]" style={{ fontWeight: 400 }}>
+                        {streamingMsg.content ? (
+                          <div className="prose prose-sm max-w-none prose-headings:font-semibold prose-h1:text-[20px] prose-h2:text-[17px] prose-h3:text-[15px] prose-h4:text-[14px] prose-headings:mt-4 prose-headings:mb-2 prose-p:my-1.5 prose-ul:my-1.5 prose-ol:my-1.5 prose-li:my-0.5 prose-table:my-2 prose-pre:my-2 prose-pre:bg-[#1e1e2e] prose-pre:text-[#e0e0e0] prose-pre:rounded-lg prose-pre:p-4 prose-code:text-[12px] prose-code:before:content-none prose-code:after:content-none prose-code:bg-[#e8eaed] prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-[#c7254e] prose-strong:font-semibold prose-blockquote:border-l-[#415a9b] prose-blockquote:bg-[#f8f9ff] prose-blockquote:py-1 prose-blockquote:px-4 prose-blockquote:rounded-r-md prose-a:text-[#415a9b] prose-a:no-underline hover:prose-a:underline prose-img:rounded-lg prose-img:border prose-img:border-[#e0e0e0]">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{streamingMsg.content}</ReactMarkdown>
+                          </div>
+                        ) : !streamingMsg.reasoning ? (
+                          <span className="inline-flex gap-1 items-center">
+                            <span className="w-[5px] h-[5px] bg-[#717182] rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                            <span className="w-[5px] h-[5px] bg-[#717182] rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                            <span className="w-[5px] h-[5px] bg-[#717182] rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {isTyping && !streamingMsg && messages[messages.length - 1]?.role !== "assistant" && (
                   <div className="flex gap-3">
                     <div className="w-[30px] h-[30px] rounded-full bg-[#030213] flex items-center justify-center shrink-0">
                       <Sparkles className="w-[13px] h-[13px] text-white" />

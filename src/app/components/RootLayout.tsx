@@ -2,8 +2,10 @@ import { useState, useRef, useEffect } from "react";
 import { Outlet, NavLink, useLocation, useNavigate } from "react-router";
 import {
   LayoutDashboard, MessageSquare, GitCompare, Shield, Swords,
-  Settings, User, LogOut
+  Settings, User, LogOut, Menu, X
 } from "lucide-react";
+import { useIsMobile } from "./ui/use-mobile";
+import { Sheet, SheetContent } from "./ui/sheet";
 
 const LAST_VISITED_KEY = "ai-review-last-visited-routes";
 
@@ -43,9 +45,11 @@ const navItems = [
 export function RootLayout() {
   const location = useLocation();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const isSettingsPage = location.pathname.startsWith("/settings");
 
   const [profileOpen, setProfileOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -75,45 +79,115 @@ export function RootLayout() {
   return (
     <div className="flex flex-col h-full bg-white font-['Inter',sans-serif]">
       {/* Top Nav */}
-      <header className="h-[56px] border-b border-[#ebebeb] flex items-center px-8 shrink-0">
+      <header className="h-[56px] border-b border-[#ebebeb] flex items-center px-4 md:px-8 shrink-0">
+        {/* Mobile hamburger */}
+        {isMobile && (
+          <button
+            onClick={() => setMobileNavOpen(true)}
+            className="w-[33px] h-[33px] rounded-full flex items-center justify-center hover:bg-[#f3f3f5] transition-colors mr-2"
+          >
+            <Menu className="w-[18px] h-[18px] text-[#667085]" />
+          </button>
+        )}
+
         {/* Logo */}
-        <div className="flex items-center gap-2.5 mr-10">
+        <div className="flex items-center gap-2.5 mr-4 md:mr-10">
           <div className="w-[30px] h-[30px] rounded-full bg-[#030213] flex items-center justify-center">
             <img src="/app-256.png" alt="ReThink" className="w-[30px] h-[30px] rounded-full" />
           </div>
-          <span className="text-[16px] text-[#0a0a0a] tracking-[-0.01em]" style={{ fontWeight: 500 }}>
-            ReThink
-          </span>
+          {!isMobile && (
+            <span className="text-[16px] text-[#0a0a0a] tracking-[-0.01em]" style={{ fontWeight: 500 }}>
+              ReThink
+            </span>
+          )}
         </div>
 
-        {/* Nav Items */}
-        <nav className="flex items-center h-full">
-          {navItems.map((item) => {
-            const active = item.end
-              ? location.pathname === item.matchPrefix
-              : location.pathname.startsWith(item.matchPrefix);
-            const target = item.section
-              ? getLastVisitedRoute(item.section, item.to)
-              : item.to;
-            return (
-              <button
-                key={item.to}
-                type="button"
-                onClick={() => navigate(target)}
-                className={
-                  `flex items-center gap-1.5 px-3 h-full text-[14px] border-b-2 transition-colors ${
-                    active
-                      ? "border-[#030213] text-[#0a0a0a]"
-                      : "border-transparent text-[#667085] hover:text-[#0a0a0a]"
-                  }`
-                }
-                style={{ fontWeight: active ? 500 : 400 }}
-              >
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
+        {/* Desktop Nav Items */}
+        {!isMobile && (
+          <nav className="flex items-center h-full">
+            {navItems.map((item) => {
+              const active = item.end
+                ? location.pathname === item.matchPrefix
+                : location.pathname.startsWith(item.matchPrefix);
+              const target = item.section
+                ? getLastVisitedRoute(item.section, item.to)
+                : item.to;
+              return (
+                <button
+                  key={item.to}
+                  type="button"
+                  onClick={() => navigate(target)}
+                  className={
+                    `flex items-center gap-1.5 px-3 h-full text-[14px] border-b-2 transition-colors ${
+                      active
+                        ? "border-[#030213] text-[#0a0a0a]"
+                        : "border-transparent text-[#667085] hover:text-[#0a0a0a]"
+                    }`
+                  }
+                  style={{ fontWeight: active ? 500 : 400 }}
+                >
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+        )}
+
+        {/* Mobile Sheet Nav */}
+        {isMobile && (
+          <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+            <SheetContent side="left" className="w-[260px] p-0">
+              <div className="flex items-center gap-2.5 px-5 h-[56px] border-b border-[#ebebeb]">
+                <div className="w-[30px] h-[30px] rounded-full bg-[#030213] flex items-center justify-center">
+                  <img src="/app-256.png" alt="ReThink" className="w-[30px] h-[30px] rounded-full" />
+                </div>
+                <span className="text-[16px] text-[#0a0a0a] tracking-[-0.01em]" style={{ fontWeight: 500 }}>
+                  ReThink
+                </span>
+              </div>
+              <nav className="flex flex-col py-2">
+                {navItems.map((item) => {
+                  const active = item.end
+                    ? location.pathname === item.matchPrefix
+                    : location.pathname.startsWith(item.matchPrefix);
+                  const target = item.section
+                    ? getLastVisitedRoute(item.section, item.to)
+                    : item.to;
+                  return (
+                    <button
+                      key={item.to}
+                      type="button"
+                      onClick={() => { navigate(target); setMobileNavOpen(false); }}
+                      className={
+                        `flex items-center gap-3 px-5 py-3 text-[14px] transition-colors ${
+                          active
+                            ? "bg-[#f3f3f5] text-[#0a0a0a]"
+                            : "text-[#667085] hover:bg-[#f8fafb] hover:text-[#0a0a0a]"
+                        }`
+                      }
+                      style={{ fontWeight: active ? 500 : 400 }}
+                    >
+                      <item.icon className="w-[16px] h-[16px]" />
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </nav>
+              <div className="border-t border-[#ebebeb] py-2">
+                <button
+                  onClick={() => { navigate("/settings/models"); setMobileNavOpen(false); }}
+                  className={`flex items-center gap-3 px-5 py-3 text-[14px] transition-colors w-full ${
+                    isSettingsPage ? "bg-[#f3f3f5] text-[#0a0a0a]" : "text-[#667085] hover:bg-[#f8fafb]"
+                  }`}
+                  style={{ fontWeight: isSettingsPage ? 500 : 400 }}
+                >
+                  <Settings className="w-[16px] h-[16px]" />
+                  设置
+                </button>
+              </div>
+            </SheetContent>
+          </Sheet>
+        )}
 
         {/* Right side */}
         <div className="ml-auto flex items-center gap-3">

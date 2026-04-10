@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   ArrowLeft, Download, Clock, Hash, Sparkles, Loader2, User,
-  Plus, PanelLeftClose, PanelLeft, Search, MoreHorizontal, Trash2, Pencil,
+  Plus, PanelLeftClose, PanelLeft,
   Upload, FileText, X, ChevronsDown,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router";
@@ -12,7 +12,6 @@ import { getAllModels } from "../services/llmConfig";
 import { agentLoop } from "../services/toolLoop";
 import { loadSkills } from "./skillData";
 import { ConversationComposer } from "./ui/conversation-composer";
-import { Input } from "./ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +26,9 @@ import {
   readChatAttachments,
   type ChatAttachment,
 } from "../services/chatAttachments";
+import { createStorageHelper, groupByRecency } from "../services/storage";
+import { HistorySidebar } from "./HistorySidebar";
+import { useIsMobile } from "./ui/use-mobile";
 
 /** Prose classes shared with ChatPage / DebatePage */
 const PROSE_CLASSES =
@@ -48,7 +50,6 @@ interface ColumnState {
 }
 
 /* ── Persistence helpers ── */
-const STORAGE_KEY = "ai-review-compare-conversations";
 
 interface StoredCompare {
   id: string;
@@ -59,44 +60,27 @@ interface StoredCompare {
   updatedAt: number;
 }
 
+const compareStorage = createStorageHelper<StoredCompare>("ai-review-compare-conversations");
+
 function loadCompares(): StoredCompare[] {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
+  return compareStorage.load();
 }
 function saveCompares(list: StoredCompare[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+  compareStorage.save(list);
 }
 
 function upsertStoredCompare(entry: StoredCompare): StoredCompare[] {
-  const list = loadCompares();
-  const idx = list.findIndex((item) => item.id === entry.id);
-  if (idx >= 0) list[idx] = entry;
-  else list.unshift(entry);
-  saveCompares(list);
-  return list;
+  return compareStorage.upsert(entry, (e) => e.id);
 }
 
 function groupCompares(list: StoredCompare[]) {
-  const now = Date.now();
-  const day = 86400000;
-  const groups: { label: string; items: StoredCompare[] }[] = [
-    { label: "今天", items: [] },
-    { label: "昨天", items: [] },
-    { label: "近7天", items: [] },
-    { label: "更早", items: [] },
-  ];
-  for (const c of list.sort((a, b) => b.updatedAt - a.updatedAt)) {
-    const diff = now - c.updatedAt;
-    if (diff < day) groups[0].items.push(c);
-    else if (diff < 2 * day) groups[1].items.push(c);
-    else if (diff < 7 * day) groups[2].items.push(c);
-    else groups[3].items.push(c);
-  }
-  return groups.filter((g) => g.items.length > 0);
+  return groupByRecency(list, (c) => c.updatedAt);
 }
 
 export function ComparePage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
+  const isMobile = useIsMobile();
 
   const configuredModels = getAllModels();
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set(configuredModels.map((m) => m.model.id)));
@@ -120,20 +104,21 @@ export function ComparePage() {
   /* ── History sidebar state ── */
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [compares, setCompares] = useState<StoredCompare[]>(() => loadCompares());
-  const [searchQuery, setSearchQuery] = useState("");
-  const [contextMenuId, setContextMenuId] = useState<string | null>(null);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const contextMenuRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const columnsRef = useRef<Record<string, ColumnState>>(columns);
   useEffect(() => { columnsRef.current = columns; }, [columns]);
 
+  /** Mobile: which model column to show */
+  const [mobileActiveModelId, setMobileActiveModelId] = useState<string | null>(null);
+
+  // Auto-close sidebar on mobile
+  useEffect(() => {
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
+
   const historyGroups = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const filtered = q ? compares.filter((c) => c.title.toLowerCase().includes(q)) : compares;
-    return groupCompares(filtered);
-  }, [compares, searchQuery]);
+    return groupCompares(compares);
+  }, [compares]);
 
   /* Redirect /compare/new → fresh ID */
   useEffect(() => {
@@ -222,13 +207,6 @@ export function ComparePage() {
     setRenamingId(null);
     setContextMenuId(null);
   };
-
-  /* Close context menu on outside click */
-  useEffect(() => {
-    const handler = (e: MouseEvent) => { if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) setContextMenuId(null); };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
 
   const toggleChecked = (id: string) => {
     setCheckedIds((prev) => {
@@ -500,146 +478,127 @@ export function ComparePage() {
     <div className="flex h-full font-['Inter',sans-serif]">
       {/* ── History Sidebar ── */}
       {sidebarOpen && (
-        <div className="w-[220px] bg-white border-r border-[#ebebeb] flex flex-col shrink-0">
-          <div className="p-3 flex items-center gap-2">
-            <button
-              onClick={() => navigate("/compare/new")}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-[8px] bg-[#030213] text-white rounded-[7px] text-[12px] hover:bg-[#1a1a2e] transition-colors"
-              style={{ fontWeight: 500 }}
-            >
-              <Plus className="w-[13px] h-[13px]" />
-              新建对比
-            </button>
-            <button
-              onClick={() => setSidebarOpen(false)}
-              className="w-[32px] h-[32px] rounded-[7px] hover:bg-[#f3f3f5] flex items-center justify-center transition-colors shrink-0"
-            >
-              <PanelLeftClose className="w-[14px] h-[14px] text-[#717182]" />
-            </button>
-          </div>
-          <div className="px-3 pb-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-[12px] w-[12px] -translate-y-1/2 text-[#8a9193]" />
-              <Input size="xs" className="pl-8" placeholder="搜索对比..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto px-2 pb-3">
-            {historyGroups.map((group) => (
-              <div key={group.label} className="mb-1.5">
-                <p className="px-2 py-1.5 text-[10px] text-[#8a9193]" style={{ fontWeight: 500 }}>{group.label}</p>
-                {group.items.map((item) => (
-                  <div key={item.id} className="relative group">
-                    {renamingId === item.id ? (
-                      <div className="flex items-center px-2.5 py-[4px]">
-                        <Input
-                          autoFocus size="xs" surface="white"
-                          className="flex-1 border-[#030213] focus-visible:border-[#030213] focus-visible:ring-[rgba(3,2,19,0.08)]"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") handleRenameCompare(item.id, renameValue); if (e.key === "Escape") setRenamingId(null); }}
-                          onBlur={() => handleRenameCompare(item.id, renameValue)}
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => navigate(`/compare/${item.id}`)}
-                        className={`w-full text-left px-2.5 py-[6px] rounded-[7px] text-[12px] transition-colors flex items-center ${
-                          item.id === id ? "bg-[#f3f3f5] text-[#0a0a0a]" : "text-[#0a0a0a] hover:bg-[#f8fafb]"
-                        }`}
-                        style={{ fontWeight: 400 }}
-                      >
-                        <span className="truncate flex-1">{item.title}</span>
-                        <span
-                          className="opacity-0 group-hover:opacity-100 shrink-0"
-                          onClick={(e) => { e.stopPropagation(); setContextMenuId(contextMenuId === item.id ? null : item.id); }}
-                        >
-                          <MoreHorizontal className="w-[12px] h-[12px] text-[#8a9193]" />
-                        </span>
-                      </button>
-                    )}
-                    {contextMenuId === item.id && (
-                      <div ref={contextMenuRef} className="absolute right-0 top-full mt-0.5 w-[120px] bg-white border border-[rgba(0,0,0,0.1)] rounded-[7px] shadow-[0_4px_12px_rgba(0,0,0,0.08)] py-1 z-30">
-                        <button
-                          onClick={() => { setRenameValue(item.title); setRenamingId(item.id); setContextMenuId(null); }}
-                          className="w-full text-left px-3 py-[5px] text-[11px] text-[#0a0a0a] hover:bg-[#f3f3f5] transition-colors flex items-center gap-2"
-                        >
-                          <Pencil className="w-[11px] h-[11px] text-[#717182]" /> 重命名
-                        </button>
-                        <button
-                          onClick={() => handleDeleteCompare(item.id)}
-                          className="w-full text-left px-3 py-[5px] text-[11px] text-[#dc2626] hover:bg-[#fef2f2] transition-colors flex items-center gap-2"
-                        >
-                          <Trash2 className="w-[11px] h-[11px]" /> 删除
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
+        <HistorySidebar
+          routePrefix="/compare"
+          activeId={id}
+          newLabel="新建对比"
+          searchPlaceholder="搜索对比..."
+          groups={historyGroups}
+          onClose={() => setSidebarOpen(false)}
+          onRename={handleRenameCompare}
+          onDelete={handleDeleteCompare}
+          open={sidebarOpen}
+        />
       )}
 
       {/* ── Main Area ── */}
       <div className="flex-1 flex flex-col min-w-0 bg-white">
-      {/* Sub header */}
-      <div className="h-[44px] border-b border-[#ebebeb] flex items-center px-4 gap-3 bg-white shrink-0">
-        {!sidebarOpen && (
-          <button onClick={() => setSidebarOpen(true)} className="w-[28px] h-[28px] rounded-[6px] hover:bg-[#f3f3f5] flex items-center justify-center transition-colors">
-            <PanelLeft className="w-[14px] h-[14px] text-[#717182]" />
+      {/* Sub header — desktop: single row; mobile: stacked */}
+      <div className="border-b border-[#ebebeb] bg-white shrink-0">
+        {/* Row 1: back / title / actions */}
+        <div className="h-[44px] flex items-center px-3 md:px-4 gap-2 md:gap-3">
+          {!sidebarOpen && (
+            <button onClick={() => setSidebarOpen(true)} className="w-[28px] h-[28px] rounded-[6px] hover:bg-[#f3f3f5] flex items-center justify-center transition-colors">
+              <PanelLeft className="w-[14px] h-[14px] text-[#717182]" />
+            </button>
+          )}
+          <button onClick={() => navigate("/")} className="text-[#667085] hover:text-[#0a0a0a] transition-colors">
+            <ArrowLeft className="w-[15px] h-[15px]" />
           </button>
-        )}
-        <button onClick={() => navigate("/")} className="text-[#667085] hover:text-[#0a0a0a] transition-colors">
-          <ArrowLeft className="w-[15px] h-[15px]" />
-        </button>
-        <span className="text-[13px] text-[#0a0a0a]" style={{ fontWeight: 500 }}>多模型对比</span>
+          <span className="text-[13px] text-[#0a0a0a] shrink-0" style={{ fontWeight: 500 }}>多模型对比</span>
 
-        <div className="flex items-center gap-1.5 ml-3">
-          {configuredModels.map((m) => (
+          {/* Desktop: model toggles inline */}
+          {!isMobile && (
+            <div className="flex items-center gap-1.5 ml-3">
+              {configuredModels.map((m) => (
+                <button
+                  key={m.model.id}
+                  onClick={() => toggleChecked(m.model.id)}
+                  className={`flex items-center gap-1.5 px-2.5 py-[5px] rounded-[7px] text-[12px] border transition-colors ${
+                    checkedIds.has(m.model.id)
+                      ? "bg-[#030213] border-[#030213] text-white"
+                      : "border-[rgba(0,0,0,0.1)] text-[#667085] hover:bg-[#f8fafb]"
+                  }`}
+                  style={{ fontWeight: 500 }}
+                >
+                  {m.model.displayName}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!isMobile && <div className="w-px h-[20px] bg-[#ebebeb] ml-2" />}
+          {!isMobile && <SkillBadges activeSkillIds={activeSkillIds} onOpenPanel={() => setSkillPanelOpen(true)} />}
+
+          <div className="ml-auto flex items-center gap-1.5">
+            {!isMobile && (
+              <button
+                onClick={() => setAutoScroll((v) => !v)}
+                className={`flex items-center gap-1.5 px-2.5 py-[5px] rounded-[7px] text-[12px] border transition-colors ${
+                  autoScroll
+                    ? "bg-[#030213] border-[#030213] text-white"
+                    : "border-[rgba(0,0,0,0.1)] text-[#667085] hover:bg-[#f8fafb]"
+                }`}
+                style={{ fontWeight: 500 }}
+                title={autoScroll ? "关闭自动滚动" : "开启自动滚动"}
+              >
+                <ChevronsDown className="w-[13px] h-[13px]" />
+                自动滚动
+              </button>
+            )}
             <button
-              key={m.model.id}
-              onClick={() => toggleChecked(m.model.id)}
-              className={`flex items-center gap-1.5 px-2.5 py-[5px] rounded-[7px] text-[12px] border transition-colors ${
-                checkedIds.has(m.model.id)
-                  ? "bg-[#030213] border-[#030213] text-white"
-                  : "border-[rgba(0,0,0,0.1)] text-[#667085] hover:bg-[#f8fafb]"
-              }`}
+              onClick={handleExport}
+              disabled={!hasAnyMessages}
+              className="flex items-center gap-1.5 px-2.5 py-[5px] rounded-[7px] text-[12px] border border-[rgba(0,0,0,0.1)] text-[#667085] hover:bg-[#f8fafb] transition-colors disabled:opacity-30"
               style={{ fontWeight: 500 }}
             >
-              {m.model.displayName}
+              <Download className="w-[13px] h-[13px]" />
+              {!isMobile && "导出"}
             </button>
-          ))}
+            {isMobile && <SkillBadges activeSkillIds={activeSkillIds} onOpenPanel={() => setSkillPanelOpen(true)} />}
+          </div>
         </div>
 
-        <div className="w-px h-[20px] bg-[#ebebeb] ml-2" />
-        <SkillBadges activeSkillIds={activeSkillIds} onOpenPanel={() => setSkillPanelOpen(true)} />
-
-        <div className="ml-auto flex items-center gap-1.5">
-          <button
-            onClick={() => setAutoScroll((v) => !v)}
-            className={`flex items-center gap-1.5 px-2.5 py-[5px] rounded-[7px] text-[12px] border transition-colors ${
-              autoScroll
-                ? "bg-[#030213] border-[#030213] text-white"
-                : "border-[rgba(0,0,0,0.1)] text-[#667085] hover:bg-[#f8fafb]"
-            }`}
-            style={{ fontWeight: 500 }}
-            title={autoScroll ? "关闭自动滚动" : "开启自动滚动"}
-          >
-            <ChevronsDown className="w-[13px] h-[13px]" />
-            自动滚动
-          </button>
-          <button
-            onClick={handleExport}
-            disabled={!hasAnyMessages}
-            className="flex items-center gap-1.5 px-2.5 py-[5px] rounded-[7px] text-[12px] border border-[rgba(0,0,0,0.1)] text-[#667085] hover:bg-[#f8fafb] transition-colors disabled:opacity-30"
-            style={{ fontWeight: 500 }}
-          >
-            <Download className="w-[13px] h-[13px]" />
-            导出
-          </button>
-        </div>
+        {/* Row 2 (mobile only): model toggle chips — horizontally scrollable */}
+        {isMobile && (
+          <div className="flex items-center gap-1.5 px-3 pb-2 overflow-x-auto no-scrollbar">
+            {configuredModels.map((m) => (
+              <button
+                key={m.model.id}
+                onClick={() => toggleChecked(m.model.id)}
+                className={`flex items-center gap-1.5 px-2.5 py-[5px] rounded-[7px] text-[12px] border transition-colors whitespace-nowrap shrink-0 ${
+                  checkedIds.has(m.model.id)
+                    ? "bg-[#030213] border-[#030213] text-white"
+                    : "border-[rgba(0,0,0,0.1)] text-[#667085] hover:bg-[#f8fafb]"
+                }`}
+                style={{ fontWeight: 500 }}
+              >
+                {m.model.displayName}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Mobile: model Tab bar for switching visible column */}
+      {isMobile && hasAnyMessages && selectedModels.length > 1 && (
+        <div className="flex border-b border-[#ebebeb] bg-white overflow-x-auto no-scrollbar">
+          {selectedModels.map((m) => {
+            const isActive = (mobileActiveModelId ?? selectedModels[0]?.model.id) === m.model.id;
+            return (
+              <button
+                key={m.model.id}
+                onClick={() => setMobileActiveModelId(m.model.id)}
+                className={`flex-1 min-w-0 px-3 py-2 text-[12px] text-center whitespace-nowrap border-b-2 transition-colors ${
+                  isActive ? "border-[#030213] text-[#0a0a0a] font-medium" : "border-transparent text-[#667085]"
+                }`}
+              >
+                {m.model.displayName}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Columns */}
       <div className="flex-1 overflow-hidden flex bg-[#f8fafb]">
@@ -658,12 +617,16 @@ export function ComparePage() {
             </div>
           </div>
         ) : (
-          selectedModels.map((m, i) => {
+          (isMobile
+            ? selectedModels.filter((m) => m.model.id === (mobileActiveModelId ?? selectedModels[0]?.model.id))
+            : selectedModels
+          ).map((m, i) => {
             const col = columns[m.model.id];
             const msgs = col?.messages ?? [];
             return (
-              <div key={m.model.id} className={`flex-1 flex flex-col min-w-0 ${i > 0 ? "border-l border-[#ebebeb]" : ""}`}>
-                {/* Column Header */}
+              <div key={m.model.id} className={`flex-1 flex flex-col min-w-0 ${!isMobile && i > 0 ? "border-l border-[#ebebeb]" : ""}`}>
+                {/* Column Header — hidden on mobile (Tab bar serves this role) */}
+                {!isMobile && (
                 <div className="px-4 py-2.5 bg-white border-b border-[#ebebeb] shrink-0">
                   <div className="flex items-center gap-2">
                     <div className="w-[24px] h-[24px] rounded-full bg-[#030213] flex items-center justify-center">
@@ -672,6 +635,7 @@ export function ComparePage() {
                     <span className="text-[13px] text-[#0a0a0a]" style={{ fontWeight: 500 }}>{m.model.displayName}</span>
                   </div>
                 </div>
+                )}
 
                 {/* Scrollable message list */}
                 <div
@@ -745,7 +709,7 @@ export function ComparePage() {
 
       {/* Input */}
       <ConversationComposer
-        containerClassName="px-6"
+        containerClassName="px-3 md:px-6"
         contentClassName="max-w-[900px]"
         value={input}
         onChange={setInput}

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router";
 import {
   ArrowLeft, Pause, BarChart3, Play, Sparkles, Loader2, ChevronDown,
-  Plus, PanelLeftClose, PanelLeft, Search, MoreHorizontal, Trash2, Pencil, X, MessageCircleQuestion, User, Settings, Eye,
+  Plus, PanelLeftClose, PanelLeft, X, MessageCircleQuestion, User, Settings, Eye,
   Upload, FileText,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -13,7 +13,6 @@ import { agentLoop } from "../services/toolLoop";
 import { loadSkills } from "./skillData";
 import { loadRoles, renderRolePrompt } from "../services/roles";
 import { ConversationComposer } from "./ui/conversation-composer";
-import { Input } from "./ui/input";
 import {
   Select,
   SelectContent,
@@ -38,6 +37,9 @@ import {
   type ChatAttachment,
 } from "../services/chatAttachments";
 import { executeBuiltinTool } from "../services/builtinTools";
+import { createStorageHelper, groupByRecency } from "../services/storage";
+import { HistorySidebar } from "./HistorySidebar";
+import { useIsMobile } from "./ui/use-mobile";
 
 interface Agent {
   id: string;
@@ -73,7 +75,6 @@ function loadAgentsFromRoles(): Agent[] {
 const debateMessages: DebateMessage[] = [];
 
 /* ── Debate persistence ── */
-const DEBATE_CONVERSATIONS_KEY = "ai-review-debate-conversations";
 
 interface StoredDebate {
   id: string;
@@ -90,28 +91,18 @@ interface StoredDebate {
   updatedAt: number;
 }
 
+const debateStorage = createStorageHelper<StoredDebate>("ai-review-debate-conversations");
+
 function loadDebates(): StoredDebate[] {
-  try {
-    const raw = localStorage.getItem(DEBATE_CONVERSATIONS_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed;
-    }
-  } catch { /* ignore */ }
-  return [];
+  return debateStorage.load();
 }
 
 function saveDebates(items: StoredDebate[]) {
-  localStorage.setItem(DEBATE_CONVERSATIONS_KEY, JSON.stringify(items));
+  debateStorage.save(items);
 }
 
 function upsertStoredDebate(item: StoredDebate): StoredDebate[] {
-  const items = loadDebates();
-  const idx = items.findIndex((entry) => entry.id === item.id);
-  if (idx >= 0) items[idx] = item;
-  else items.unshift(item);
-  saveDebates(items);
-  return items;
+  return debateStorage.upsert(item, (e) => e.id);
 }
 
 /* ── Module-level loop control (survives component unmount) ── */
@@ -125,23 +116,13 @@ interface DebateLoopCtrl {
 const debateLoops = new Map<string, DebateLoopCtrl>();
 
 function groupDebates(items: StoredDebate[]) {
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const yesterdayStart = todayStart - 86400000;
-  const sorted = [...items].sort((a, b) => b.updatedAt - a.updatedAt);
-  const groups: { label: string; items: { id: string; title: string }[] }[] = [];
-  const todayItems = sorted.filter(c => c.updatedAt >= todayStart);
-  const yesterdayItems = sorted.filter(c => c.updatedAt >= yesterdayStart && c.updatedAt < todayStart);
-  const earlierItems = sorted.filter(c => c.updatedAt < yesterdayStart);
-  if (todayItems.length) groups.push({ label: "今天", items: todayItems.map(c => ({ id: c.id, title: c.title })) });
-  if (yesterdayItems.length) groups.push({ label: "昨天", items: yesterdayItems.map(c => ({ id: c.id, title: c.title })) });
-  if (earlierItems.length) groups.push({ label: "更早", items: earlierItems.map(c => ({ id: c.id, title: c.title })) });
-  return groups;
+  return groupByRecency(items, (c) => c.updatedAt, (c) => ({ id: c.id, title: c.title }));
 }
 
 export function DebatePage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [agentState, setAgentState] = useState(() => loadAgentsFromRoles());
   const [isPaused, setIsPaused] = useState(false);
   const [messages, setMessages] = useState<DebateMessage[]>(debateMessages);
@@ -189,11 +170,6 @@ export function DebatePage() {
   /* ── History sidebar state ── */
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [debates, setDebates] = useState<StoredDebate[]>(loadDebates);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [contextMenuId, setContextMenuId] = useState<string | null>(null);
-  const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const contextMenuRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const isPausedRef = useRef(isPaused);
@@ -204,9 +180,12 @@ export function DebatePage() {
   const stateSnapshotRef = useRef({ topic, projectBackground, backgroundAttachments, summaryContent, currentRound, totalRounds, activeSkillIds, isDebating });
   useEffect(() => { stateSnapshotRef.current = { topic, projectBackground, backgroundAttachments, summaryContent, currentRound, totalRounds, activeSkillIds, isDebating }; }, [topic, projectBackground, backgroundAttachments, summaryContent, currentRound, totalRounds, activeSkillIds, isDebating]);
 
-  const historyGroups = groupDebates(
-    searchQuery ? debates.filter(c => c.title.toLowerCase().includes(searchQuery.toLowerCase())) : debates
-  );
+  const historyGroups = groupDebates(debates);
+
+  // Auto-close sidebar on mobile
+  useEffect(() => {
+    if (isMobile) setSidebarOpen(false);
+  }, [isMobile]);
 
   const applyStoredDebate = useCallback((stored: StoredDebate) => {
     setMessages(stored.messages);
@@ -320,10 +299,10 @@ export function DebatePage() {
     setDebates(items);
   }, [id, messages, topic, projectBackground, backgroundAttachments, summaryContent, currentRound, totalRounds, activeSkillIds, isDebating]);
 
-  const persistDebateMessage = useCallback((message: DebateMessage, overrides?: Partial<StoredDebate>) => {
+  const persistDebateMessage = useCallback((message: DebateMessage, overrides?: Partial<StoredDebate>, debounce = true) => {
     if (!id || id === "new") return;
 
-    const existing = loadDebates().find((entry) => entry.id === id);
+    const existing = debateStorage.find((entry) => entry.id === id);
     const nextMessages = existing ? [...existing.messages] : [];
     const msgIdx = nextMessages.findIndex((entry) => entry.id === message.id);
     if (msgIdx >= 0) nextMessages[msgIdx] = message;
@@ -337,7 +316,7 @@ export function DebatePage() {
     const nextTotalRounds = overrides?.totalRounds ?? existing?.totalRounds ?? totalRounds;
     const nextSkillIds = overrides?.activeSkillIds ?? existing?.activeSkillIds ?? activeSkillIds;
 
-    const items = upsertStoredDebate({
+    const entry: StoredDebate = {
       id,
       title: nextTopic.slice(0, 30) || "新辩论",
       topic: nextTopic,
@@ -350,10 +329,23 @@ export function DebatePage() {
       activeSkillIds: nextSkillIds,
       isDebating: overrides?.isDebating ?? existing?.isDebating ?? isDebating,
       updatedAt: Date.now(),
-    });
-    const saved = items.find((entry) => entry.id === id);
-    lastSyncedUpdatedAtRef.current = saved?.updatedAt ?? Date.now();
-    setDebates(items);
+    };
+
+    if (debounce) {
+      // During streaming: update in-memory cache immediately, debounce localStorage write
+      const items = debateStorage.load();
+      const idx = items.findIndex((e) => e.id === id);
+      if (idx >= 0) items[idx] = entry; else items.unshift(entry);
+      debateStorage.debouncedSave(items, 500);
+      lastSyncedUpdatedAtRef.current = entry.updatedAt;
+      setDebates([...items]);
+    } else {
+      // Final save: immediate write
+      const items = upsertStoredDebate(entry);
+      const saved = items.find((e) => e.id === id);
+      lastSyncedUpdatedAtRef.current = saved?.updatedAt ?? Date.now();
+      setDebates(items);
+    }
   }, [id, topic, projectBackground, backgroundAttachments, summaryContent, currentRound, totalRounds, activeSkillIds, isDebating]);
 
   // Save when skill config changes (even without sending a message)
@@ -476,6 +468,8 @@ export function DebatePage() {
     return null;
   }, [agentModels, configuredModels]);
 
+  const hasUsableActiveAgent = agentState.some((agent) => agent.active && getAgentModelConfig(agent.id));
+
   const runAgentTurn = useCallback(
     async (agent: Agent, round: number, priorMessages: DebateMessage[], userTopic: string, ctrl: DebateLoopCtrl) => {
       const modelCfg = getAgentModelConfig(agent.id);
@@ -529,20 +523,22 @@ export function DebatePage() {
             onToken(token) {
               if (ctrl.cancelled) return;
               newMsg.text += token;
-              persistDebateMessage({ ...newMsg }, { currentRound: round, topic: userTopic, isDebating: true });
+              persistDebateMessage({ ...newMsg }, { currentRound: round, topic: userTopic, isDebating: true }, true);
               setMessages((prev) =>
                 prev.map((m) => (m.id === msgId ? { ...m, text: newMsg.text } : m)),
               );
             },
             onDone() {
               if (ctrl.cancelled) { resolve(newMsg); return; }
-              persistDebateMessage({ ...newMsg }, { currentRound: round, topic: userTopic, isDebating: true });
+              debateStorage.flush();
+              persistDebateMessage({ ...newMsg }, { currentRound: round, topic: userTopic, isDebating: true }, false);
               resolve(newMsg);
             },
             onError(err) {
               if (ctrl.cancelled) { resolve(newMsg); return; }
               newMsg.text = newMsg.text || `**错误**: ${err.message}`;
-              persistDebateMessage({ ...newMsg }, { currentRound: round, topic: userTopic, isDebating: true });
+              debateStorage.flush();
+              persistDebateMessage({ ...newMsg }, { currentRound: round, topic: userTopic, isDebating: true }, false);
               setMessages((prev) =>
                 prev.map((m) => (m.id === msgId ? { ...m, text: newMsg.text } : m)),
               );
@@ -792,6 +788,12 @@ export function DebatePage() {
   const handleStart = async () => {
     const text = input.trim();
     if (!text && pendingAttachments.length === 0) return;
+
+    if (!hasUsableActiveAgent) {
+      setComposerError("未找到可用模型，请先在设置中为至少一个活跃角色配置模型。");
+      return;
+    }
+
     const attachments = pendingAttachments;
     const { displayContent, promptContent } = buildOutgoingUserMessage(input, attachments);
     setTopic(displayContent);
@@ -806,6 +808,20 @@ export function DebatePage() {
   const handleUserMessage = () => {
     const text = input.trim();
     if ((!text && pendingAttachments.length === 0) || isDebating) return;
+
+    const respondingAgents =
+      targetAgent === "all"
+        ? agentState.filter((a) => a.active)
+        : agentState.filter((a) => a.id === targetAgent && a.active);
+    const usableRespondingAgents = respondingAgents.filter((agent) => Boolean(getAgentModelConfig(agent.id)));
+
+    if (usableRespondingAgents.length === 0) {
+      setComposerError(targetAgent === "all"
+        ? "当前没有可响应的角色模型，请先在设置中为活跃角色配置模型。"
+        : "目标角色未配置可用模型，请先为该角色选择模型。");
+      return;
+    }
+
     const attachments = pendingAttachments;
     const { displayContent, promptContent } = buildOutgoingUserMessage(input, attachments);
     setInput("");
@@ -821,12 +837,7 @@ export function DebatePage() {
     persistDebateMessage(userMsg);
 
     // Next call target agent(s) to respond
-    const respondingAgents =
-      targetAgent === "all"
-        ? agentState.filter((a) => a.active)
-        : agentState.filter((a) => a.id === targetAgent && a.active);
-
-    for (const agent of respondingAgents) {
+    for (const agent of usableRespondingAgents) {
       const modelCfg = getAgentModelConfig(agent.id);
       if (!modelCfg) continue;
       const msgId = `${Date.now()}-${agent.id}-reply`;
@@ -868,17 +879,19 @@ export function DebatePage() {
         {
           onToken(token) {
             newMsg.text += token;
-            persistDebateMessage({ ...newMsg });
+            persistDebateMessage({ ...newMsg }, undefined, true);
             setMessages((prev) =>
               prev.map((m) => (m.id === msgId ? { ...m, text: newMsg.text } : m)),
             );
           },
           onDone() {
-            persistDebateMessage({ ...newMsg });
+            debateStorage.flush();
+            persistDebateMessage({ ...newMsg }, undefined, false);
           },
           onError(err) {
             newMsg.text = newMsg.text || `**错误**: ${err.message}`;
-            persistDebateMessage({ ...newMsg });
+            debateStorage.flush();
+            persistDebateMessage({ ...newMsg }, undefined, false);
             setMessages((prev) =>
               prev.map((m) => (m.id === msgId ? { ...m, text: newMsg.text } : m)),
             );
@@ -950,17 +963,19 @@ export function DebatePage() {
       {
         onToken(token) {
           accumulated += token;
-          persistDebateMessage({ ...summaryMsg, text: accumulated }, { summaryContent: accumulated });
+          persistDebateMessage({ ...summaryMsg, text: accumulated }, { summaryContent: accumulated }, true);
           setSummaryContent(accumulated);
           setMessages((prev) => prev.map((m) => m.id === summaryMsgId ? { ...m, text: accumulated } : m));
         },
         onDone() {
-          persistDebateMessage({ ...summaryMsg, text: accumulated }, { summaryContent: accumulated });
+          debateStorage.flush();
+          persistDebateMessage({ ...summaryMsg, text: accumulated }, { summaryContent: accumulated }, false);
           setIsSummarizing(false);
         },
         onError(err) {
           accumulated += `\n\n**错误**: ${err.message}`;
-          persistDebateMessage({ ...summaryMsg, text: accumulated }, { summaryContent: accumulated });
+          debateStorage.flush();
+          persistDebateMessage({ ...summaryMsg, text: accumulated }, { summaryContent: accumulated }, false);
           setMessages((prev) => prev.map((m) => m.id === summaryMsgId ? { ...m, text: accumulated } : m));
           setIsSummarizing(false);
         },
@@ -982,91 +997,23 @@ export function DebatePage() {
     <div className="flex h-full font-['Inter',sans-serif]">
       {/* ── History Sidebar ── */}
       {sidebarOpen && (
-        <div className="w-[220px] bg-white border-r border-[#ebebeb] flex flex-col shrink-0">
-          <div className="p-3 flex items-center gap-2">
-            <button
-              onClick={() => navigate("/debate/new")}
-              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-[8px] bg-[#030213] text-white rounded-[7px] text-[12px] hover:bg-[#1a1a2e] transition-colors"
-              style={{ fontWeight: 500 }}
-            >
-              <Plus className="w-[13px] h-[13px]" />
-              新建辩论
-            </button>
-            <button
-              onClick={() => setSidebarOpen(false)}
-              className="w-[32px] h-[32px] rounded-[7px] hover:bg-[#f3f3f5] flex items-center justify-center transition-colors shrink-0"
-            >
-              <PanelLeftClose className="w-[14px] h-[14px] text-[#717182]" />
-            </button>
-          </div>
-          <div className="px-3 pb-2">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-[12px] w-[12px] -translate-y-1/2 text-[#8a9193]" />
-              <Input size="xs" className="pl-8" placeholder="搜索辩论..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto px-2 pb-3">
-            {historyGroups.map((group) => (
-              <div key={group.label} className="mb-1.5">
-                <p className="px-2 py-1.5 text-[10px] text-[#8a9193]" style={{ fontWeight: 500 }}>{group.label}</p>
-                {group.items.map((item) => (
-                  <div key={item.id} className="relative group">
-                    {renamingId === item.id ? (
-                      <div className="flex items-center px-2.5 py-[4px]">
-                        <Input
-                          autoFocus size="xs" surface="white"
-                          className="flex-1 border-[#030213] focus-visible:border-[#030213] focus-visible:ring-[rgba(3,2,19,0.08)]"
-                          value={renameValue}
-                          onChange={(e) => setRenameValue(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") handleRenameDebate(item.id, renameValue); if (e.key === "Escape") setRenamingId(null); }}
-                          onBlur={() => handleRenameDebate(item.id, renameValue)}
-                        />
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => navigate(`/debate/${item.id}`)}
-                        className={`w-full text-left px-2.5 py-[6px] rounded-[7px] text-[12px] transition-colors flex items-center ${
-                          item.id === id ? "bg-[#f3f3f5] text-[#0a0a0a]" : "text-[#0a0a0a] hover:bg-[#f8fafb]"
-                        }`}
-                        style={{ fontWeight: 400 }}
-                      >
-                        <span className="truncate flex-1">{item.title}</span>
-                        <span
-                          className="opacity-0 group-hover:opacity-100 shrink-0"
-                          onClick={(e) => { e.stopPropagation(); setContextMenuId(contextMenuId === item.id ? null : item.id); }}
-                        >
-                          <MoreHorizontal className="w-[12px] h-[12px] text-[#8a9193]" />
-                        </span>
-                      </button>
-                    )}
-                    {contextMenuId === item.id && (
-                      <div ref={contextMenuRef} className="absolute right-0 top-full mt-0.5 w-[120px] bg-white border border-[rgba(0,0,0,0.1)] rounded-[7px] shadow-[0_4px_12px_rgba(0,0,0,0.08)] py-1 z-30">
-                        <button
-                          onClick={() => { setRenameValue(item.title); setRenamingId(item.id); setContextMenuId(null); }}
-                          className="w-full text-left px-3 py-[5px] text-[11px] text-[#0a0a0a] hover:bg-[#f3f3f5] transition-colors flex items-center gap-2"
-                        >
-                          <Pencil className="w-[11px] h-[11px] text-[#717182]" /> 重命名
-                        </button>
-                        <button
-                          onClick={() => handleDeleteDebate(item.id)}
-                          className="w-full text-left px-3 py-[5px] text-[11px] text-[#dc2626] hover:bg-[#fef2f2] transition-colors flex items-center gap-2"
-                        >
-                          <Trash2 className="w-[11px] h-[11px]" /> 删除
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-        </div>
+        <HistorySidebar
+          routePrefix="/debate"
+          activeId={id}
+          newLabel="新建辩论"
+          searchPlaceholder="搜索辩论..."
+          groups={historyGroups}
+          onClose={() => setSidebarOpen(false)}
+          onRename={handleRenameDebate}
+          onDelete={handleDeleteDebate}
+          open={sidebarOpen}
+        />
       )}
 
       {/* ── Main Area ── */}
       <div className="flex-1 flex flex-col min-w-0 bg-white">
       {/* Header */}
-      <div className="h-[44px] border-b border-[#ebebeb] flex items-center px-4 gap-3 bg-white shrink-0">
+      <div className="h-[44px] border-b border-[#ebebeb] flex items-center px-3 md:px-4 gap-2 md:gap-3 bg-white shrink-0">
         {!sidebarOpen && (
           <button onClick={() => setSidebarOpen(true)} className="w-[28px] h-[28px] rounded-[6px] hover:bg-[#f3f3f5] flex items-center justify-center transition-colors">
             <PanelLeft className="w-[14px] h-[14px] text-[#717182]" />
@@ -1075,13 +1022,14 @@ export function DebatePage() {
         <button onClick={() => navigate("/")} className="text-[#667085] hover:text-[#0a0a0a] transition-colors">
           <ArrowLeft className="w-[15px] h-[15px]" />
         </button>
-        <span className="text-[13px] text-[#0a0a0a]" style={{ fontWeight: 500 }}>辩论场</span>
-        {topic && <span className="text-[12px] text-[#717182] truncate max-w-[200px]" style={{ fontWeight: 400 }}>"{topic}"</span>}
+        <span className="text-[13px] text-[#0a0a0a] shrink-0" style={{ fontWeight: 500 }}>辩论场</span>
+        {!isMobile && topic && <span className="text-[12px] text-[#717182] truncate max-w-[200px]" style={{ fontWeight: 400 }}>"{topic}"</span>}
 
-        <div className="w-px h-[20px] bg-[#ebebeb] ml-1" />
-        <SkillBadges activeSkillIds={activeSkillIds} onOpenPanel={() => setSkillPanelOpen(true)} />
+        {!isMobile && <div className="w-px h-[20px] bg-[#ebebeb] ml-1" />}
+        {!isMobile && <SkillBadges activeSkillIds={activeSkillIds} onOpenPanel={() => setSkillPanelOpen(true)} />}
 
         <div className="ml-auto flex items-center gap-1.5">
+          {isMobile && <SkillBadges activeSkillIds={activeSkillIds} onOpenPanel={() => setSkillPanelOpen(true)} />}
           {/* Editable round count */}
           <span className="text-[11px] text-[#717182] mr-2 flex items-center gap-1" style={{ fontWeight: 400 }}>
             Round {Math.min(currentRound, totalRounds)}/
@@ -1148,7 +1096,7 @@ export function DebatePage() {
             style={{ fontWeight: 500 }}
           >
             {isDebating ? <Pause className="w-[12px] h-[12px]" /> : <Play className="w-[12px] h-[12px]" />}
-            {isDebating ? "暂停" : "继续"}
+            {!isMobile && (isDebating ? "暂停" : "继续")}
           </button>
           <button
             onClick={handleGenerateSummary}
@@ -1157,13 +1105,14 @@ export function DebatePage() {
             style={{ fontWeight: 500 }}
           >
             <BarChart3 className="w-[12px] h-[12px]" />
-            总结
+            {!isMobile && "总结"}
           </button>
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Agent Sidebar */}
+        {/* Agent Sidebar — hidden on mobile */}
+        {!isMobile && (
         <div className="w-[200px] bg-white border-r border-[#ebebeb] flex flex-col shrink-0">
           <div className="p-3 flex-1 overflow-y-auto">
             <div className="flex items-center justify-between mb-2 px-1">
@@ -1271,6 +1220,7 @@ export function DebatePage() {
             </p>
           </div>
         </div>
+        )}
 
         {/* Debate Content */}
         <div className="flex-1 flex flex-col bg-[#f8fafb] min-w-0">
@@ -1443,7 +1393,7 @@ export function DebatePage() {
 
           {/* Input — inside content area */}
           <ConversationComposer
-            containerClassName="px-5 py-2.5"
+            containerClassName="px-3 md:px-5 py-2.5"
             contentClassName="max-w-[600px]"
             value={input}
             onChange={setInput}
@@ -1452,6 +1402,9 @@ export function DebatePage() {
             actionLabel={waitingForUser ? "继续辩论" : (isFetchingUrls ? "解析链接中…" : (messages.length === 0 ? "开始" : "发送"))}
             sending={(isDebating && !waitingForUser) || isFetchingUrls}
             disabled={(isDebating && !waitingForUser) || isFetchingUrls}
+            canSend={waitingForUser
+              ? Boolean(input.trim() || pendingAttachments.length > 0)
+              : Boolean(input.trim() || pendingAttachments.length > 0) && (messages.length > 0 || hasUsableActiveAgent)}
             onDragOver={handleComposerDragOver}
             onDragLeave={handleComposerDragLeave}
             onDrop={handleComposerDrop}

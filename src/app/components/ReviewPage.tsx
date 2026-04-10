@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useParams } from "react-router";
 import {
   ArrowLeft, Download, CheckCircle2, Clock, ChevronDown,
   ChevronUp, Sparkles, User, Loader2
@@ -7,8 +7,9 @@ import {
 import { SkillPanel, SkillBadges } from "./SkillPanel";
 import { getDefaultModel } from "../services/llmConfig";
 import { chatCompletionStream } from "../services/llm";
-import { defaultSkills } from "./skillData";
+import { loadSkills } from "./skillData";
 import { ConversationComposer } from "./ui/conversation-composer";
+import { createStorageHelper } from "../services/storage";
 
 type Layer = "L1" | "L2" | "L3";
 
@@ -42,26 +43,60 @@ interface DialogueMsg {
   text: string;
 }
 
-const initialDialogue: DialogueMsg[] = [
-  { role: "assistant", text: "让我们来检验假设 #1：\"用户会完成全部12步引导\"。\n\n请问，您对用户完成引导流程的信心来源于什么数据或经验？" },
-  { role: "user", text: "因为我们有引导奖励机制，完成后发放钻石 ×100" },
-  { role: "assistant", text: "奖励机制在第几步生效？如果用户在奖励触发前就流失了呢？\n\n行业数据显示：\n- 手游新手引导平均完成率约 40-60%\n- 超过 5 步的强制引导，每多一步流失率增加 8-12%\n\n您的12步设计是否有相似产品的对比数据支撑？" },
-];
-
 const feedbackLogs = [
   { from: "L2", to: "L1", text: "补充检查：发现引导流程缺少退出路径定义", time: "14:32" },
   { from: "L2", to: "L1", text: "老玩家判定标准需补充到合规检查项", time: "14:28" },
 ];
 
+interface StoredReviewSession {
+  id: string;
+  subject: string;
+  activeLayer: Layer;
+  activeAssumptionId: number;
+  dialogueMap: Record<number, DialogueMsg[]>;
+  activeSkillIds: string[];
+  updatedAt: number;
+}
+
+const reviewStorage = createStorageHelper<StoredReviewSession>("ai-review-review-sessions");
+
+function loadReviewSessions(): StoredReviewSession[] {
+  return reviewStorage.load();
+}
+
+function saveReviewSessions(items: StoredReviewSession[]) {
+  reviewStorage.save(items);
+}
+
+function normalizeReviewSubject(reviewId?: string) {
+  if (!reviewId || reviewId === "new") return "新方案";
+  const decoded = decodeURIComponent(reviewId).trim();
+  if (!decoded) return "新方案";
+  return decoded.replace(/[-_]+/g, " ");
+}
+
+function buildInitialDialogue(subject: string, assumptionId: number, assumptionText: string): DialogueMsg[] {
+  return [
+    {
+      role: "assistant",
+      text: `让我们来检验《${subject}》中的假设 #${assumptionId}：\"${assumptionText}\"。\n\n请问，您对这个判断的信心来源于什么数据或经验？`,
+    },
+  ];
+}
+
 export function ReviewPage() {
+  const { id } = useParams();
   const navigate = useNavigate();
+  const reviewId = id ?? "new";
+  const fallbackSubject = normalizeReviewSubject(reviewId);
   const [activeLayer, setActiveLayer] = useState<Layer>("L2");
   const [l1Expanded, setL1Expanded] = useState(false);
   const [input, setInput] = useState("");
   const [activeAssumptionId, setActiveAssumptionId] = useState(1);
-  const [dialogueMap, setDialogueMap] = useState<Record<number, DialogueMsg[]>>({
-    1: initialDialogue,
-  });
+  const [subject, setSubject] = useState(fallbackSubject);
+  const [dialogueMap, setDialogueMap] = useState<Record<number, DialogueMsg[]>>(() => ({
+    1: buildInitialDialogue(fallbackSubject, 1, l2Assumptions[0].text),
+  }));
   const dialogue = dialogueMap[activeAssumptionId] ?? [];
   const setDialogue = (updater: DialogueMsg[] | ((prev: DialogueMsg[]) => DialogueMsg[])) => {
     setDialogueMap((prev) => ({
@@ -77,6 +112,48 @@ export function ReviewPage() {
   useEffect(() => {
     dialogueEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [dialogue]);
+
+  useEffect(() => {
+    const stored = loadReviewSessions().find((entry) => entry.id === reviewId);
+    if (stored) {
+      setSubject(stored.subject || normalizeReviewSubject(reviewId));
+      setActiveLayer(stored.activeLayer ?? "L2");
+      setActiveAssumptionId(stored.activeAssumptionId ?? 1);
+      setDialogueMap(
+        stored.dialogueMap && Object.keys(stored.dialogueMap).length > 0
+          ? stored.dialogueMap
+          : { 1: buildInitialDialogue(stored.subject || normalizeReviewSubject(reviewId), 1, l2Assumptions[0].text) },
+      );
+      setActiveSkillIds(stored.activeSkillIds ?? []);
+    } else {
+      const nextSubject = normalizeReviewSubject(reviewId);
+      setSubject(nextSubject);
+      setActiveLayer("L2");
+      setActiveAssumptionId(1);
+      setDialogueMap({ 1: buildInitialDialogue(nextSubject, 1, l2Assumptions[0].text) });
+      setActiveSkillIds([]);
+    }
+    setInput("");
+    setIsTyping(false);
+    setL1Expanded(false);
+  }, [reviewId]);
+
+  useEffect(() => {
+    const sessions = loadReviewSessions();
+    const next: StoredReviewSession = {
+      id: reviewId,
+      subject,
+      activeLayer,
+      activeAssumptionId,
+      dialogueMap,
+      activeSkillIds,
+      updatedAt: Date.now(),
+    };
+    const idx = sessions.findIndex((entry) => entry.id === reviewId);
+    if (idx >= 0) sessions[idx] = next;
+    else sessions.unshift(next);
+    saveReviewSessions(sessions);
+  }, [reviewId, subject, activeLayer, activeAssumptionId, dialogueMap, activeSkillIds]);
 
   const severityColor = (s: string) =>
     s === "high" ? "bg-[#fef2f2] text-[#dc2626]" : s === "medium" ? "bg-[#fffbeb] text-[#b45309]" : "bg-[#f0fdf4] text-[#16a34a]";
@@ -95,20 +172,19 @@ export function ReviewPage() {
 当前正在审查的假设列表：
 ${l2Assumptions.map((a) => `#${a.id}: ${a.text}`).join("\n")}`;
 
+  prompt += `\n\n当前审查方案主题：${subject}`;
+
     if (activeSkillIds.length > 0) {
-      const skills = defaultSkills.filter((s) => activeSkillIds.includes(s.id));
+      const skills = loadSkills().filter((s) => activeSkillIds.includes(s.id));
       if (skills.length > 0) {
         prompt += "\n\n## 已加载的 Skill 知识库（用于引用行业标准和数据）：\n";
         for (const skill of skills) {
-          prompt += `\n### ${skill.name}\n`;
-          for (const doc of skill.documents) {
-            prompt += `**${doc.name}**:\n${doc.content}\n\n`;
-          }
+          prompt += `\n### ${skill.name}\n${skill.content}\n\n`;
         }
       }
     }
     return prompt;
-  }, [activeSkillIds]);
+  }, [activeSkillIds, subject]);
 
   const handleSend = () => {
     if (!input.trim()) return;
@@ -214,7 +290,7 @@ ${l2Assumptions.map((a) => `#${a.id}: ${a.text}`).join("\n")}`;
           <ArrowLeft className="w-[15px] h-[15px]" />
         </button>
         <span className="text-[13px] text-[#0a0a0a]" style={{ fontWeight: 500 }}>方案深度分析</span>
-        <span className="text-[12px] text-[#717182]" style={{ fontWeight: 400 }}>"新手引导系统 V2"</span>
+        <span className="text-[12px] text-[#717182]" style={{ fontWeight: 400 }}>{`"${subject}"`}</span>
 
         <div className="w-px h-[20px] bg-[#ebebeb] ml-2" />
 
@@ -329,12 +405,7 @@ ${l2Assumptions.map((a) => `#${a.id}: ${a.text}`).join("\n")}`;
                         if (!dialogueMap[a.id]) {
                           setDialogueMap((prev) => ({
                             ...prev,
-                            [a.id]: [
-                              {
-                                role: "assistant",
-                                text: `让我们来检验假设 #${a.id}："${a.text}"。\n\n请问，您对这个假设的信心来源于什么数据或经验？`,
-                              },
-                            ],
+                            [a.id]: buildInitialDialogue(subject, a.id, a.text),
                           }));
                         }
                       }}

@@ -88,7 +88,7 @@ export function Dashboard() {
 
   return (
     <div className="h-full overflow-y-auto bg-[#f8fafb]">
-      <div className="max-w-[1060px] mx-auto px-6 py-8">
+      <div className="max-w-[1060px] mx-auto px-4 py-6 md:px-6 md:py-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-[#0a0a0a] text-[22px] tracking-[-0.02em]" style={{ fontWeight: 500 }}>
@@ -100,7 +100,7 @@ export function Dashboard() {
         </div>
 
         {/* Quick Actions */}
-        <div className="grid grid-cols-3 gap-2.5 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-8">
           {quickActions.map((action) => (
             <button
               key={action.label}
@@ -116,7 +116,7 @@ export function Dashboard() {
           ))}
         </div>
 
-        <div className="grid grid-cols-[1fr_300px] gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_300px] gap-5">
           <div className="space-y-6">
             {/* Skills Section */}
             <div>
@@ -130,7 +130,7 @@ export function Dashboard() {
                   管理全部
                 </button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {loadSkills().slice(0, 4).map((skill) => (
                   <button
                     key={skill.id}
@@ -152,7 +152,7 @@ export function Dashboard() {
             {/* Methodologies */}
             <div>
               <p className="text-[12px] text-[#8a9193] mb-2.5" style={{ fontWeight: 500 }}>分析方法论</p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {getMethodologyCards().map((m) => (
                   <button
                     key={m.id}

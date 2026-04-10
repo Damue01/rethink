@@ -208,7 +208,14 @@ export function SettingsSkills() {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-2 py-2">
-          {grouped.map((group) => (
+          {grouped.length === 0 ? (
+            <div className="px-3 py-8 text-center">
+              <p className="text-[12px] text-[#0a0a0a]" style={{ fontWeight: 500 }}>未找到匹配的 Skill</p>
+              <p className="mt-1 text-[10.5px] text-[#8a9193]" style={{ fontWeight: 400 }}>
+                {searchQuery ? "尝试调整搜索关键词。" : "当前还没有可用 Skill。"}
+              </p>
+            </div>
+          ) : grouped.map((group) => (
             <div key={group.id} className="mb-2">
               <p className="px-2 py-1.5 text-[10px] text-[#8a9193]" style={{ fontWeight: 500 }}>
                 {group.emoji} {group.label}
@@ -238,7 +245,7 @@ export function SettingsSkills() {
       {/* Center - Skill Detail */}
       <div className="flex-1 flex flex-col overflow-hidden bg-[#f8fafb]">
         {/* Header */}
-        <div className="px-6 py-5 bg-white border-b border-[#ebebeb] shrink-0">
+        <div className="px-4 md:px-6 py-4 md:py-5 bg-white border-b border-[#ebebeb] shrink-0">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-3">
               {/* Emoji - clickable */}

@@ -52,7 +52,7 @@ export function ConversationComposer({
   const sendDisabled = disabled || !(canSend ?? Boolean(value.trim()));
 
   return (
-    <div className={cn("bg-white px-5 py-3", containerClassName)}>
+    <div className={cn("bg-white px-3 md:px-5 py-3", containerClassName)}>
       <div className={cn("mx-auto", contentClassName)}>
         {topSlot ? <div className="mb-2">{topSlot}</div> : null}
         <div

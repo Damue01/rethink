@@ -132,7 +132,7 @@ export function SettingsModels() {
 
   return (
     <div className="h-full overflow-y-auto bg-[#f8fafb] font-['Inter',sans-serif]">
-      <div className="max-w-[720px] mx-auto px-6 py-8">
+      <div className="max-w-[720px] mx-auto px-4 md:px-6 py-6 md:py-8">
         <div className="flex items-center justify-between mb-6">
           <div>
             <p className="text-[18px] text-[#0a0a0a]" style={{ fontWeight: 500 }}>模型配置</p>
@@ -161,7 +161,7 @@ export function SettingsModels() {
 
               {provider.expanded && (
                 <div className="px-5 pb-5 border-t border-[rgba(0,0,0,0.06)] pt-4">
-                  <div className="grid grid-cols-2 gap-3 mb-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                     <div>
                       <label className="text-[11px] text-[#717182] mb-1.5 block" style={{ fontWeight: 500 }}>Provider 名称</label>
                       <Input

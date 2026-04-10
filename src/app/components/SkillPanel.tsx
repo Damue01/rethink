@@ -6,6 +6,8 @@ import {
 } from "lucide-react";
 import { defaultSkills, type Skill, loadSkills, loadCategories } from "./skillData";
 import { Input } from "./ui/input";
+import { useIsMobile } from "./ui/use-mobile";
+import { Sheet, SheetContent } from "./ui/sheet";
 
 interface SkillPanelProps {
   isOpen: boolean;
@@ -18,6 +20,7 @@ export function SkillPanel({ isOpen, onClose, activeSkillIds, onToggleSkill }: S
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"all" | "active">("all");
+  const isMobile = useIsMobile();
 
   if (!isOpen) return null;
 
@@ -33,8 +36,8 @@ export function SkillPanel({ isOpen, onClose, activeSkillIds, onToggleSkill }: S
     skills: filtered.filter((s) => s.category === cat.id),
   })).filter((g) => g.skills.length > 0);
 
-  return (
-    <div className="w-[360px] border-l border-[#ebebeb] bg-white flex flex-col shrink-0 h-full font-['Inter',sans-serif]">
+  const panelContent = (
+    <div className={isMobile ? "flex flex-col h-full bg-white font-['Inter',sans-serif]" : "w-[360px] border-l border-[#ebebeb] bg-white flex flex-col shrink-0 h-full font-['Inter',sans-serif]"}>
       {/* Header */}
       <div className="px-5 py-4 border-b border-[#ebebeb] shrink-0">
         <div className="flex items-center justify-between mb-3">
@@ -175,6 +178,18 @@ export function SkillPanel({ isOpen, onClose, activeSkillIds, onToggleSkill }: S
       </div>
     </div>
   );
+
+  if (isMobile) {
+    return (
+      <Sheet open={isOpen} onOpenChange={(v) => { if (!v) onClose(); }}>
+        <SheetContent side="right" className="w-full max-w-[360px] p-0">
+          {panelContent}
+        </SheetContent>
+      </Sheet>
+    );
+  }
+
+  return panelContent;
 }
 
 /* Compact inline skill badge for toolbar use */

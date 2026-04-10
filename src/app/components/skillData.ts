@@ -25,18 +25,28 @@ export const builtinCategories: SkillCategory[] = [
 
 const CATEGORIES_STORAGE_KEY = "ai-review-skill-categories";
 
+/** Module-level caches — avoids repeated JSON.parse on every call */
+let _categoriesCache: SkillCategory[] | null = null;
+let _skillsCache: Skill[] | null = null;
+
 export function loadCategories(): SkillCategory[] {
+  if (_categoriesCache) return _categoriesCache;
   try {
     const raw = localStorage.getItem(CATEGORIES_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        _categoriesCache = parsed;
+        return parsed;
+      }
     }
   } catch { /* ignore */ }
+  _categoriesCache = builtinCategories;
   return builtinCategories;
 }
 
 export function saveCategories(categories: SkillCategory[]) {
+  _categoriesCache = categories;
   localStorage.setItem(CATEGORIES_STORAGE_KEY, JSON.stringify(categories));
 }
 
@@ -46,6 +56,7 @@ export const skillCategories = builtinCategories;
 const SKILLS_STORAGE_KEY = "ai-review-skills";
 
 export function loadSkills(): Skill[] {
+  if (_skillsCache) return _skillsCache;
   try {
     const raw = localStorage.getItem(SKILLS_STORAGE_KEY);
     if (raw) {
@@ -57,10 +68,12 @@ export function loadSkills(): Skill[] {
           saveSkills(migrated);
           return migrated;
         }
+        _skillsCache = parsed;
         return parsed;
       }
     }
   } catch { /* ignore */ }
+  _skillsCache = defaultSkills;
   return defaultSkills;
 }
 
@@ -86,6 +99,7 @@ function migrateOldSkill(old: any): Skill {
 }
 
 export function saveSkills(skills: Skill[]) {
+  _skillsCache = skills;
   localStorage.setItem(SKILLS_STORAGE_KEY, JSON.stringify(skills));
 }
 

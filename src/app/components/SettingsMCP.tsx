@@ -143,7 +143,7 @@ export function SettingsMCP() {
 
   return (
     <div className="h-full overflow-y-auto bg-[#f8fafb] font-['Inter',sans-serif]">
-      <div className="max-w-[720px] mx-auto px-6 py-8">
+      <div className="max-w-[720px] mx-auto px-4 md:px-6 py-6 md:py-8">
         {/* Header */}
         <div className="mb-6">
           <p className="text-[18px] text-[#0a0a0a]" style={{ fontWeight: 500 }}>MCP 配置</p>

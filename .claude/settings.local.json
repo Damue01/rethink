@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /E/Ai2Work/AISchemeReview/src/app/services/*.ts /E/Ai2Work/AISchemeReview/src/app/components/*.tsx)",
+      "Bash(grep:*)",
+      "Bash(npx vite:*)"
+    ]
+  }
+}

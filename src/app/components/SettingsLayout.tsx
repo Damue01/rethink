@@ -13,13 +13,13 @@ export function SettingsLayout() {
   return (
     <div className="flex flex-col h-full font-['Inter',sans-serif]">
       {/* Settings sub-nav */}
-      <div className="h-[40px] border-b border-[#ebebeb] flex items-center px-6 bg-white shrink-0 gap-1">
+      <div className="h-[40px] border-b border-[#ebebeb] flex items-center px-3 md:px-6 bg-white shrink-0 gap-1 overflow-x-auto no-scrollbar">
         {settingsTabs.map((tab) => (
           <NavLink
             key={tab.to}
             to={tab.to}
             className={({ isActive }) =>
-              `flex items-center gap-1.5 px-3 py-[6px] rounded-[7px] text-[12.5px] transition-colors ${
+              `flex items-center gap-1.5 px-3 py-[6px] rounded-[7px] text-[12.5px] transition-colors shrink-0 whitespace-nowrap ${
                 isActive
                   ? "bg-[#f3f3f5] text-[#0a0a0a]"
                   : "text-[#717182] hover:text-[#0a0a0a] hover:bg-[#f8fafb]"
